@@ -1,0 +1,184 @@
+#!/bin/bash
+#
+# Reference: https://github.com/moby/moby/blob/master/contrib/mkimage-yum.sh
+#
+# NOTE: IMPORTING THE DOCKER IMAGE MUST USE 'docker load --input /path/to/tar.gz'
+
+if [[ $EUID -ne 0 ]]; then
+  echo "This script must be run as root"
+  exit 1
+fi
+
+WORKINGDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+timenow=$(date +%s)
+
+set -e
+
+function usage() {
+  echo "$(basename $0) [options] imagename|/path/to/imgenv"
+  echo "  imgenv             The full path to the imgenv file"
+  echo "  imagename          Build the image using defaults and the specified imagename (i.e. the base OS)"
+  echo "Options"
+  echo "  -y  <yum.conf>     The full path to the yum.conf - default to /etc/yum.conf"
+  echo "  -t  <tag>          Tag name - default 'latest'"
+  echo "  -s  <imgfile>      Import the image into Docker and perform a 'docker save' of image to imgfile (i.e. /tmp/image.tar.gz)."
+  echo "  -h                 Print the help message"
+  exit 1
+}
+
+yumconf=/etc/yum.conf
+version=latest
+save=false
+saveoutput=""
+
+while getopts ":y:s:t:h" opt; do
+  case $opt in
+  y)
+    yumconf=$OPTARG
+    if [ ! -f "${yumconf}" ]; then
+      echo "Error: ${yumconf} does not exist"
+      exit 22
+    fi
+    ;;
+  h)
+    usage
+    ;;
+  t)
+    version="$OPTARG"
+    ;;
+  s)
+    save="true"
+    saveoutput=$OPTARG
+    if [ -z "${saveoutput}" ]; then
+      echo "Error: Must specified the full path to an output file"
+      exit 33
+    fi
+    ;;
+  *)
+    echo "Invalid option: -$OPTARG"
+    usage
+    ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+name=$1
+if [ -z "${name}" ]; then
+  usage
+fi
+
+if [ -f "${name}" ]; then
+  source "${name}"
+else
+  imagename="$(echo "${name//\//$''}")"
+fi
+
+if [ -z "${imagename}" ]; then
+  echo "Image name does not exist, please specify 'imagename' in ${name}"
+  exit 11
+fi
+
+target=$(mktemp -d --tmpdir $(basename $0).XXXXXX)
+
+set -x
+
+if [ -z "${packages}" -a -z "${rpms}" -a -z "${scripts}" ]; then
+  packages=("kernel.x86_64" "yum.noarch")
+fi
+
+#-------------------------------------------------------------------------------
+# Install packages
+
+if [ ! -z "${packages}" ]; then
+  yum -c "${yumconf}" \
+    --installroot="${target}" \
+    --releasever=/ --setopt=tsflags=nodocs \
+    --setopt=group_package_types=mandatory \
+    -y install "${packages[@]}"
+else
+  echo "No yum packages configured for ${imagename}"
+fi
+
+#-------------------------------------------------------------------------------
+# Install RPMs
+
+if [ ! -z "${rpms}" ]; then
+  for file in "${rpms[@]}"
+  do
+    if [ -f ${file} ]; then
+      echo "Installing RPM file ${file}"
+      yum -c "${yumconf}" \
+        --installroot="${target}" \
+        --releasever=/ --setopt=tsflags=nodocs \
+        --setopt=group_package_types=mandatory \
+        -y localinstall "${file}"
+    else
+      echo "Cannot find RPM file ${file}"
+    fi
+  done
+else
+  echo "No RPM file(s) configured for ${imagename}"
+fi
+
+#-------------------------------------------------------------------------------
+# Execute scripts
+
+if [ ! -z "${scripts}" ]; then
+  for file in "${scripts[@]}"
+  do
+    if [ -f ${file} ]; then
+      echo "Executing script file: ${file}"
+      bash ${file} "${target}"
+    else
+      echo "Cannot find script file ${file}"
+    fi
+  done
+else
+  echo "No script file(s) configured for ${imagename}"
+fi
+
+#-------------------------------------------------------------------------------
+# Default network
+
+cat > "$target"/etc/sysconfig/network <<EOF
+NETWORKING=yes
+HOSTNAME=localhost.localdomain
+EOF
+
+#-------------------------------------------------------------------------------
+# Import and save image to output file
+
+if [ "${save}" == "true" ]; then
+  yum -c "${yumconf}" --installroot="${target}" -y clean all
+
+  rm -rf "$target"/usr/{{lib,share}/locale,{lib,lib64}/gconv,bin/localedef,sbin/build-locale-archive}
+  rm -rf "$target"/usr/share/{man,doc,info,gnome/help}
+  rm -rf "$target"/usr/share/cracklib
+  rm -rf "$target"/usr/share/i18n
+  rm -rf "$target"/var/cache/yum
+  mkdir -p --mode=0755 "$target"/var/cache/yum
+  rm -rf "$target"/sbin/sln
+  rm -rf "$target"/etc/ld.so.cache "$target"/var/cache/ldconfig
+  mkdir -p --mode=0755 "$target"/var/cache/ldconfig
+
+  currentversion=$(docker images -q ${name}:${version})
+
+  if [ ! -z "${currentversion}" ]; then
+    echo "Removing existing ${imagename}:${version}"
+    docker rmi --force ${imagename}:${version}
+  fi
+
+  echo "Importing ${imagename}:${version}"
+  tar --numeric-owner -c -C "${target}" . | docker import - ${imagename}:${version}
+
+  docker run -i -t --rm ${imagename}:${version} /bin/bash -c 'echo success'
+
+  echo "Saving docker ${imagename}:${version} to ${saveoutput}"
+  docker save ${imagename}:${version} | gzip > ${saveoutput}
+  #docker save -o ${saveoutput} ${imagename}:${version}
+
+  echo "Working directory for image ${imagename}:${version}: ${target}"
+else
+  echo "Docker image file(s) are located ${target}"
+fi

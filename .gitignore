@@ -1,0 +1,12 @@
+.vagrant
+.DS_Store
+.gradle
+.settings
+.project
+.classpath
+.idea
+*.iml
+*.tar.gz
+*.tar
+
+
