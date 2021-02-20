@@ -19,6 +19,18 @@ Options
 
 Configuration file detailing the following.
 
+```
+# Example
+
+imagename=sample-os
+
+packages=("kernel.x86_64" "yum.noarch" "unzip")
+
+rpms=("/tmp/jdk-11.0.4_linux-x64_bin.rpm")
+
+scripts=("/tmp/install_node.sh" "/tmp/install_angular.sh")
+```
+
 1. (mandatory) `imagename` The image name.
 
 2. `packages` Full name of yum packages to install (i.e. kernel.x86_64).
@@ -67,3 +79,13 @@ java version "11.0.4" 2019-07-16 LTS
 Java(TM) SE Runtime Environment 18.9 (build 11.0.4+10-LTS)
 Java HotSpot(TM) 64-Bit Server VM 18.9 (build 11.0.4+10-LTS, mixed mode)
 ```
+
+# Resources
+
+- https://docs.docker.com/engine/install/binaries/
+
+- https://www.digitalocean.com/community/tutorials/how-to-install-and-use-docker-compose-on-centos-7
+
+- https://docs.docker.com/registry/
+
+- https://www.digitalocean.com/community/tutorials/how-to-set-up-a-private-docker-registry-on-ubuntu-18-04c
